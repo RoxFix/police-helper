@@ -17,8 +17,8 @@ import { saveAs } from 'file-saver'
 import * as XLSX from 'xlsx'
 import './App.css'
 
-const DEMO_LOGIN = 'admin'
-const DEMO_PASSWORD = '12345'
+const DEMO_LOGIN = 'eod1'
+const DEMO_PASSWORD = 'police1'
 const APP_VERSION = 'restore-excel-after-refresh-2026-05-01-0026'
 const CLOUD_SAVE_URL = import.meta.env.VITE_CLOUD_SAVE_URL
 const WORK_DRAFT_KEY = 'police-helper-work-draft'
