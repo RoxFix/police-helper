@@ -229,6 +229,21 @@ const dataUrlToArrayBuffer = async (dataUrl) => {
   return response.arrayBuffer()
 }
 
+const downloadBlob = (blob, fileName) => {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = fileName
+  link.rel = 'noopener'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+
+  window.setTimeout(() => {
+    URL.revokeObjectURL(url)
+  }, 1000)
+}
+
 const loadRecentViewerFiles = () => {
   try {
     return JSON.parse(localStorage.getItem(RECENT_VIEWER_FILES_KEY) ?? '[]')
@@ -1212,10 +1227,7 @@ function App() {
       return
     }
 
-    saveAs(
-      result.blob,
-      result.outputName,
-    )
+    downloadBlob(result.blob, result.outputName)
     setStatus(`Готово: изменено ячеек ${result.changedCells}`)
   }
 
