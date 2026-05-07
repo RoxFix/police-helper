@@ -121,17 +121,15 @@ const OLD_EO_KUZNETSOV_SIGNER =
   'Т.в.о. начальника Краматорського РУП ГУНП в Донецькій області, підполковник поліції Артем КУЗНЄЦОВ'
 const NEW_EO_KUZNETSOV_SIGNER = EO_SIGNER_OPTIONS[0]
 
+const DOCUMENT_VALUE_REPLACEMENTS = {
+  'ЄО:signer': {
+    [OLD_EO_KUZNETSOV_SIGNER]: NEW_EO_KUZNETSOV_SIGNER,
+  },
+}
+
 const normalizeDocumentValue = (documentType, field, value) => {
   const text = String(value ?? '')
-  if (
-    documentType === 'ЄО' &&
-    field === 'signer' &&
-    text === OLD_EO_KUZNETSOV_SIGNER
-  ) {
-    return NEW_EO_KUZNETSOV_SIGNER
-  }
-
-  return text
+  return DOCUMENT_VALUE_REPLACEMENTS[`${documentType}:${field}`]?.[text] ?? text
 }
 
 const findHeaderColumn = (row, matcher) =>
@@ -466,6 +464,7 @@ function App() {
   const [manualName, setManualName] = useState('')
   const [manualRow, setManualRow] = useState('')
   const [documentEdits, setDocumentEdits] = useState({})
+  const [savedCellValues, setSavedCellValues] = useState({})
   const [activeTargetType, setActiveTargetType] = useState('actNumber')
   const [rulesByTarget, setRulesByTarget] = useState({
     actNumber: [createRule('actNumber')],
@@ -484,6 +483,8 @@ function App() {
   const [activeViewerRecentId, setActiveViewerRecentId] = useState('')
   const fileInputRef = useRef(null)
   const viewerFileInputRef = useRef(null)
+  const sourceBufferRef = useRef(null)
+  const savedCellValuesRef = useRef({})
 
   const activeSheet = workbook && sheetName ? workbook.Sheets[sheetName] : null
   const rows = useMemo(() => {
@@ -553,12 +554,15 @@ function App() {
         const restoredWorkbook = XLSX.read(buffer, { type: 'array', cellDates: true })
 
         setWorkbook(restoredWorkbook)
+        sourceBufferRef.current = buffer
         setSourceBuffer(buffer)
         setFileName(draft.fileName ?? '')
         setSheetName(draft.sheetName ?? restoredWorkbook.SheetNames[0] ?? '')
         setNameColumn(draft.nameColumn ?? '')
         setManualPeople(draft.manualPeople ?? [])
         setDocumentEdits(draft.documentEdits ?? {})
+        savedCellValuesRef.current = draft.savedCellValues ?? {}
+        setSavedCellValues(draft.savedCellValues ?? {})
         setRulesByTarget(draft.rulesByTarget ?? {
           actNumber: [createRule('actNumber')],
           erdrExtract: [createRule('erdrExtract')],
@@ -590,6 +594,7 @@ function App() {
             nameColumn,
             manualPeople,
             documentEdits,
+            savedCellValues,
             rulesByTarget,
             activeTargetType,
             activeRuleId,
@@ -609,6 +614,7 @@ function App() {
     nameColumn,
     manualPeople,
     documentEdits,
+    savedCellValues,
     rulesByTarget,
     activeTargetType,
     activeRuleId,
@@ -829,6 +835,7 @@ function App() {
     const firstSheet = loadedWorkbook.SheetNames[0] ?? ''
 
     setWorkbook(loadedWorkbook)
+    sourceBufferRef.current = buffer
     setSourceBuffer(buffer)
     setFileName(name)
     setSheetName(firstSheet)
@@ -838,6 +845,8 @@ function App() {
     })
     setActiveRuleId('')
     setManualPeople([])
+    savedCellValuesRef.current = {}
+    setSavedCellValues({})
     try {
       const documentDraft = JSON.parse(
         localStorage.getItem(DOCUMENT_EDITS_DRAFT_KEY) ?? '{}',
@@ -898,6 +907,7 @@ function App() {
 
   const clearHelperFile = () => {
     setWorkbook(null)
+    sourceBufferRef.current = null
     setSourceBuffer(null)
     setFileName('')
     setSheetName('')
@@ -905,6 +915,8 @@ function App() {
     setSearchTerm('')
     setManualPeople([])
     setDocumentEdits({})
+    savedCellValuesRef.current = {}
+    setSavedCellValues({})
     setRulesByTarget({
       actNumber: [createRule('actNumber')],
       erdrExtract: [createRule('erdrExtract')],
@@ -1232,12 +1244,31 @@ function App() {
     setActiveRuleId(targetRules[Math.max(activeRuleIndex, 0)]?.id ?? targetRules[0]?.id ?? '')
   }
 
+  const getCurrentReadyChanges = () => [
+    ...previewChanges.filter((change) => change.ready),
+    ...documentChanges,
+  ]
+
   const buildUpdatedWorkbook = async () => {
-    if (!workbook || !activeSheet || !sourceBuffer) {
+    const currentSourceBuffer = sourceBufferRef.current ?? sourceBuffer
+    const currentSavedCellValues = savedCellValuesRef.current ?? savedCellValues
+
+    if (!workbook || !activeSheet || !currentSourceBuffer) {
       return { error: 'Сначала загрузите Excel-файл' }
     }
 
-    if (!previewChanges.length && !documentChanges.length) {
+    const currentReadyChanges = getCurrentReadyChanges()
+    const savedChanges = Object.entries(currentSavedCellValues).map(([address, value]) => ({
+      id: `saved-${address}`,
+      address,
+      value,
+    }))
+    const changesToWrite = [
+      ...savedChanges,
+      ...currentReadyChanges,
+    ]
+
+    if (!changesToWrite.length) {
       return { error: 'Выберите фамилии или измените нижнюю таблицу документов' }
     }
 
@@ -1245,7 +1276,7 @@ function App() {
       return { error: 'Укажите хотя бы одну дату для заполнения' }
     }
 
-    const zip = await JSZip.loadAsync(sourceBuffer.slice(0))
+    const zip = await JSZip.loadAsync(currentSourceBuffer.slice(0))
     const sheetXmlPath = await getSheetXmlPath(zip, sheetName)
     const sheetFile = sheetXmlPath ? zip.file(sheetXmlPath) : null
     if (!sheetFile) {
@@ -1276,12 +1307,7 @@ function App() {
       changedCells += 1
     }
 
-    previewChanges.forEach((change) => {
-      if (!change.ready) return
-      writeChange(change)
-    })
-
-    documentChanges.forEach((change) => {
+    changesToWrite.forEach((change) => {
       writeChange(change)
     })
 
@@ -1305,11 +1331,24 @@ function App() {
   }
 
   const saveCurrentWork = async () => {
+    const currentSavedChanges = Object.fromEntries(
+      getCurrentReadyChanges().map((change) => [change.address, change.value]),
+    )
+    const nextSavedCellValues = {
+      ...(savedCellValuesRef.current ?? {}),
+      ...currentSavedChanges,
+    }
+    savedCellValuesRef.current = nextSavedCellValues
+    setSavedCellValues(nextSavedCellValues)
+
     const result = await buildUpdatedWorkbook()
     if (result.error) {
       setStatus(result.error)
       return
     }
+
+    const savedBuffer = await result.blob.arrayBuffer()
+    const savedWorkbook = XLSX.read(savedBuffer, { type: 'array', cellDates: true })
 
     if (CLOUD_SAVE_URL) {
       const formData = new FormData()
@@ -1328,23 +1367,26 @@ function App() {
         return
       }
 
-      setStatus(`Excel сохранен в облаке: ${result.outputName}`)
+      setWorkbook(savedWorkbook)
+      sourceBufferRef.current = savedBuffer
+      setSourceBuffer(savedBuffer)
+      setStatus(`Excel сохранен в облаке и применен на сайте: ${result.outputName}`)
       return
     }
 
-    const reader = new FileReader()
-    reader.onload = () => {
-      localStorage.setItem(
-        'police-helper-xlsx-save',
-        JSON.stringify({
-          fileName: result.outputName,
-          savedAt: new Date().toISOString(),
-          dataUrl: reader.result,
-        }),
-      )
-      setStatus(`Excel сохранен в браузере: ${result.outputName}`)
-    }
-    reader.readAsDataURL(result.blob)
+    const fileDataUrl = await arrayBufferToDataUrl(savedBuffer)
+    localStorage.setItem(
+      'police-helper-xlsx-save',
+      JSON.stringify({
+        fileName: result.outputName,
+        savedAt: new Date().toISOString(),
+        dataUrl: fileDataUrl,
+      }),
+    )
+    setWorkbook(savedWorkbook)
+    sourceBufferRef.current = savedBuffer
+    setSourceBuffer(savedBuffer)
+    setStatus(`Excel сохранен в браузере и применен на сайте: ${result.outputName}`)
   }
 
   const downloadWorkbook = async () => {
