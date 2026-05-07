@@ -96,8 +96,8 @@ const MAY_2026_DATES = Array.from({ length: 31 }, (_, index) => {
 })
 
 const EO_AGENCY_OPTIONS = [
-  'ВП № 1 Краматорського РУП ГУНП в Донецькій області',
   'Краматорський РУП ГУНП в Донецькій області',
+  'ВП № 1 Краматорського РУП ГУНП в Донецькій області',
   'ВП № 3 Краматорського РУП ГУНП в Донецькій області',
 ]
 
@@ -112,10 +112,27 @@ const ACT_SIGNER_OPTIONS = [
 ]
 
 const EO_SIGNER_OPTIONS = [
+  'Начальник Краматорського РУП ГУНП в Донецькій області, підполковник поліції Артем КУЗНЄЦОВ',
   'Начальник ВП № 1 Краматорського РУП ГУНП в Донецькій області, підполковник поліції Євгеній ТУГАЙ',
-  'Т.в.о. начальника Краматорського РУП ГУНП в Донецькій області, підполковник поліції Артем КУЗНЄЦОВ',
   'Т.в.о. начальника ВП № 3 Краматорського РУП ГУНП в Донецькій області, полковник поліції Ігор УГНІВЕНКО',
 ]
+
+const OLD_EO_KUZNETSOV_SIGNER =
+  'Т.в.о. начальника Краматорського РУП ГУНП в Донецькій області, підполковник поліції Артем КУЗНЄЦОВ'
+const NEW_EO_KUZNETSOV_SIGNER = EO_SIGNER_OPTIONS[0]
+
+const normalizeDocumentValue = (documentType, field, value) => {
+  const text = String(value ?? '')
+  if (
+    documentType === 'ЄО' &&
+    field === 'signer' &&
+    text === OLD_EO_KUZNETSOV_SIGNER
+  ) {
+    return NEW_EO_KUZNETSOV_SIGNER
+  }
+
+  return text
+}
 
 const findHeaderColumn = (row, matcher) =>
   row.findIndex((cell) => matcher(normalize(cell)))
@@ -477,10 +494,20 @@ function App() {
   const documentTable = useMemo(() => findDocumentTable(rows), [rows])
   const documentRows = useMemo(
     () =>
-      documentTable.rows.map((row) => ({
-        ...row,
-        ...(documentEdits[row.rowNumber] ?? {}),
-      })),
+      documentTable.rows.map((row) => {
+        const mergedRow = {
+          ...row,
+          ...(documentEdits[row.rowNumber] ?? {}),
+        }
+
+        return {
+          ...mergedRow,
+          number: normalizeDocumentValue(mergedRow.type, 'number', mergedRow.number),
+          date: normalizeDocumentValue(mergedRow.type, 'date', mergedRow.date),
+          agency: normalizeDocumentValue(mergedRow.type, 'agency', mergedRow.agency),
+          signer: normalizeDocumentValue(mergedRow.type, 'signer', mergedRow.signer),
+        }
+      }),
     [documentEdits, documentTable],
   )
 
@@ -488,8 +515,11 @@ function App() {
     () =>
       documentTable.rows.flatMap((originalRow) =>
         DOCUMENT_EDIT_FIELDS.flatMap(({ key }) => {
-          const editedValue = documentEdits[originalRow.rowNumber]?.[key]
-          if (editedValue === undefined || editedValue === originalRow[key]) return []
+          const editedValue =
+            documentEdits[originalRow.rowNumber]?.[key] ??
+            normalizeDocumentValue(originalRow.type, key, originalRow[key])
+          const normalizedValue = normalizeDocumentValue(originalRow.type, key, editedValue)
+          if (normalizedValue === originalRow[key]) return []
 
           const columnIndex = documentTable.columns[key]
           if (!Number.isInteger(columnIndex) || columnIndex < 0) return []
@@ -497,7 +527,7 @@ function App() {
           return {
             id: `document-${originalRow.rowNumber}-${key}`,
             address: `${getColumnLetter(columnIndex)}${originalRow.rowNumber}`,
-            value: editedValue,
+            value: normalizedValue,
           }
         }),
       ),
