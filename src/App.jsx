@@ -58,6 +58,9 @@ const normalize = (value) =>
     .trim()
     .toLowerCase()
 
+const areSameKeys = (left = [], right = []) =>
+  left.length === right.length && left.every((key, index) => key === right[index])
+
 const isLikelyName = (value) => {
   const text = String(value ?? '').trim()
   if (text.length < 2 || text.length > 80) return false
@@ -594,6 +597,34 @@ function App() {
     )
   }, [documentEdits, fileName, sheetName])
 
+  useEffect(() => {
+    setRulesByTarget((current) => {
+      const actRules = current.actNumber ?? []
+      const erdrRules = [...(current.erdrExtract ?? [])]
+      let changed = false
+
+      actRules.forEach((actRule, index) => {
+        const existingRule = erdrRules[index] ?? createRule('erdrExtract')
+        const nextPersonKeys = actRule.personKeys ?? []
+
+        if (!erdrRules[index] || !areSameKeys(existingRule.personKeys ?? [], nextPersonKeys)) {
+          erdrRules[index] = {
+            ...existingRule,
+            personKeys: nextPersonKeys,
+          }
+          changed = true
+        }
+      })
+
+      if (!changed) return current
+
+      return {
+        ...current,
+        erdrExtract: erdrRules,
+      }
+    })
+  }, [rulesByTarget.actNumber])
+
   const usedColumns = useMemo(() => {
     const maxColumns = rows.reduce((max, row) => Math.max(max, row.length), 0)
     return Array.from({ length: maxColumns }, (_, index) => {
@@ -937,20 +968,43 @@ function App() {
     const targetRuleId = activeRule?.id
     if (!targetRuleId) return
 
-    setRulesByTarget((current) => ({
-      ...current,
-      [activeTargetType]: current[activeTargetType].map((rule) => {
-        if (rule.id !== targetRuleId) return rule
+    setRulesByTarget((current) => {
+      const currentRules = current[activeTargetType] ?? []
+      const activeRuleIndex = currentRules.findIndex((rule) => rule.id === targetRuleId)
+      if (activeRuleIndex === -1) return current
 
-        const currentKeys = rule.personKeys ?? []
-        return {
+      const currentKeys = currentRules[activeRuleIndex].personKeys ?? []
+      const nextPersonKeys = currentKeys.includes(personKey)
+        ? currentKeys.filter((key) => key !== personKey)
+        : [...currentKeys, personKey]
+      const nextCurrentRules = currentRules.map((rule) =>
+        rule.id === targetRuleId
+          ? {
           ...rule,
-          personKeys: currentKeys.includes(personKey)
-            ? currentKeys.filter((key) => key !== personKey)
-            : [...currentKeys, personKey],
+              personKeys: nextPersonKeys,
         }
-      }),
-    }))
+          : rule,
+      )
+
+      const nextRules = {
+        ...current,
+        [activeTargetType]: nextCurrentRules,
+      }
+
+      if (activeTargetType === 'actNumber') {
+        const erdrRules = [...(current.erdrExtract ?? [])]
+        while (erdrRules.length <= activeRuleIndex) {
+          erdrRules.push(createRule('erdrExtract'))
+        }
+        erdrRules[activeRuleIndex] = {
+          ...erdrRules[activeRuleIndex],
+          personKeys: nextPersonKeys,
+        }
+        nextRules.erdrExtract = erdrRules
+      }
+
+      return nextRules
+    })
   }
 
   const addManualPerson = (event) => {
@@ -1044,19 +1098,43 @@ function App() {
     const targetRuleId = activeRule?.id
     if (!targetRuleId) return
 
-    setRulesByTarget((current) => ({
-      ...current,
-      [activeTargetType]: current[activeTargetType].map((rule) => {
-        if (rule.id !== targetRuleId) return rule
-        const currentKeys = rule.personKeys ?? []
-        return {
+    setRulesByTarget((current) => {
+      const currentRules = current[activeTargetType] ?? []
+      const activeRuleIndex = currentRules.findIndex((rule) => rule.id === targetRuleId)
+      if (activeRuleIndex === -1) return current
+
+      const currentKeys = currentRules[activeRuleIndex].personKeys ?? []
+      const nextPersonKeys = allSelected
+        ? currentKeys.filter((personKey) => !visibleKeys.includes(personKey))
+        : [...new Set([...currentKeys, ...visibleKeys])]
+      const nextCurrentRules = currentRules.map((rule) =>
+        rule.id === targetRuleId
+          ? {
           ...rule,
-          personKeys: allSelected
-            ? currentKeys.filter((personKey) => !visibleKeys.includes(personKey))
-            : [...new Set([...currentKeys, ...visibleKeys])],
+              personKeys: nextPersonKeys,
         }
-      }),
-    }))
+          : rule,
+      )
+
+      const nextRules = {
+        ...current,
+        [activeTargetType]: nextCurrentRules,
+      }
+
+      if (activeTargetType === 'actNumber') {
+        const erdrRules = [...(current.erdrExtract ?? [])]
+        while (erdrRules.length <= activeRuleIndex) {
+          erdrRules.push(createRule('erdrExtract'))
+        }
+        erdrRules[activeRuleIndex] = {
+          ...erdrRules[activeRuleIndex],
+          personKeys: nextPersonKeys,
+        }
+        nextRules.erdrExtract = erdrRules
+      }
+
+      return nextRules
+    })
   }
 
   const updateRule = (id, field, value) => {
@@ -1080,13 +1158,24 @@ function App() {
 
   const addRule = () => {
     const newRule = createRule(activeTargetType)
-    setRulesByTarget((current) => ({
-      ...current,
-      [activeTargetType]: [
-        ...(current[activeTargetType] ?? []),
-        newRule,
-      ],
-    }))
+    setRulesByTarget((current) => {
+      const nextRules = {
+        ...current,
+        [activeTargetType]: [
+          ...(current[activeTargetType] ?? []),
+          newRule,
+        ],
+      }
+
+      if (activeTargetType === 'actNumber') {
+        nextRules.erdrExtract = [
+          ...(current.erdrExtract ?? []),
+          createRule('erdrExtract'),
+        ]
+      }
+
+      return nextRules
+    })
     setActiveRuleId(newRule.id)
   }
 
@@ -1103,7 +1192,13 @@ function App() {
   }
 
   const handleTargetChange = (targetType) => {
+    const activeRuleIndex = (rulesByTarget[activeTargetType] ?? []).findIndex(
+      (rule) => rule.id === activeRule?.id,
+    )
+    const targetRules = rulesByTarget[targetType] ?? []
+
     setActiveTargetType(targetType)
+    setActiveRuleId(targetRules[Math.max(activeRuleIndex, 0)]?.id ?? targetRules[0]?.id ?? '')
   }
 
   const buildUpdatedWorkbook = async () => {
